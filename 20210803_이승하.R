@@ -24,8 +24,6 @@ options(scipen = 20)
 ### install, load and attach packages ###
 # user-defined function
 
-install.packages("dlookr")
-
 myfcn_pkgInstallAttachLoad <- function(pkgs_attach, pkgs_load) {
   
   # install packages
@@ -54,8 +52,8 @@ myfcn_pkgInstallAttachLoad <- function(pkgs_attach, pkgs_load) {
 # 인터넷 연결 필요(CRAN 접속)
 myfcn_pkgInstallAttachLoad(
   
-  pkgs_attach = c("magrittr", "tidyverse", "glmnet", "randomForest", "dlookr", "ggplot"),
-  pkgs_load = c("readr", "pillar", "psych", "Hmisc", "skimr",
+  pkgs_attach = c("magrittr", "tidyverse", "glmnet", "randomForest", "dlookr", "ggplot2", "broom", "dplyr", "MASS"),
+  pkgs_load = c("readr", "pillar", "psych", "Hmisc", "skimr", "ggplot2",
                 "corrplot", "VIM", "DMwR2", "mice", "MLmetrics")
 )
 
@@ -180,7 +178,7 @@ num_uniq_int <- tr_df %>%
   # (참고) `data.table:::uniqueN` 사용 가능
   summarise(across(everything(), ~ length(na.omit(unique(.))))) %>% 
   # 단지 코드 제외하고
-  select(-단지코드) %>% 
+  dplyr::select(-단지코드) %>% 
   # column별로 합 계산
   apply(2, sum) 
 
@@ -192,7 +190,7 @@ cols_uniq <- c("단지코드", cols_uniq)
 
 # unique한 column만 따로 저장
 tr_uniq_df <- tr_df %>% 
-  select(all_of(cols_uniq)) %>% 
+  dplyr::select(all_of(cols_uniq)) %>% 
   distinct(across(everything()))
 
 tr_uniq_df
@@ -202,17 +200,17 @@ tr_uniq_df
 length(unique(te_df$단지코드))
 # `te_df`에 있는 `cols_uniq` column이 unique한지 확인
 te_df %>% 
-  select(any_of(cols_uniq)) %>% 
+  dplyr::select(any_of(cols_uniq)) %>% 
   distinct(across(everything())) %>% 
   nrow()
 # unique한 column만 따로 저장
 te_uniq_df <- te_df %>% 
-  select(any_of(cols_uniq)) %>% 
+  dplyr::select(any_of(cols_uniq)) %>% 
   distinct(across(everything()))
 
 # unique하지 않은 column들은 어떤 게 있을까?
 tr_df %>% 
-  select(-all_of(cols_uniq)) %>% 
+  dplyr::select(-all_of(cols_uniq)) %>% 
   head()
 
 # (주의) 공가수는 (아마도) 전용면적 상관없이 단지 전체 중복 들어간 듯
@@ -226,12 +224,12 @@ cols_chr <- c("임대건물구분", "지역", "공급유형", "자격유형")
 
 # 분포 확인 : column별 빈도 수
 tr_df %>%
-  select(all_of(cols_chr)) %>% 
+  dplyr::select(all_of(cols_chr)) %>% 
   map(table)
 
 # 분포 확인 : 조합별 빈도 수
 tr_df %>% 
-  select(all_of(cols_chr)) %>% 
+  dplyr::select(all_of(cols_chr)) %>% 
   table() %>%
   as.data.frame() %>% 
   filter(Freq > 0) %>% 
@@ -309,7 +307,7 @@ tr_area_freq_df <- tr_df %>%
     values_fill = 0
   ) %>% 
   # column명 정렬
-  select(all_of(sort(names(.))))
+  dplyr::select(all_of(sort(names(.))))
 
 # 총면적 변수 추가
 tr_uniq_df %<>% inner_join(tr_area_freq_df, by = "단지코드")
@@ -326,7 +324,7 @@ tr_uniq_df
 #        변수별로 중복값 제거해서 단지코드별로 보는 방법 존재
 
 cols_num <- tr_uniq_df %>% 
-  select(where(is.numeric)) %>%
+  dplyr::select(where(is.numeric)) %>%
   names() %>% 
   # Y변수는 제외
   setdiff("등록차량수")
@@ -334,7 +332,7 @@ cols_num <- tr_uniq_df %>%
 cols_num
 
 cols_fct <- tr_uniq_df %>% 
-  select(where(is.factor)) %>%
+  dplyr::select(where(is.factor)) %>%
   names()
 
 
@@ -384,7 +382,7 @@ for (tmp_name in cols_num) {
 ### correlation ###
 # X, Y 둘다 연속형일 때 : Pearson correlation coefficient
 tr_uniq_df %>% 
-  select(등록차량수, all_of(cols_num)) %>% 
+  dplyr::select(등록차량수, all_of(cols_num)) %>% 
   # (X, Y) 둘 다 문제 없는 pair들만 이용해 상관계수 계산
   cor(use = 'pairwise.complete.obs') %>% 
   corrplot::corrplot.mixed(tl.pos = 'd')
@@ -396,6 +394,9 @@ ggplot() +
   geom_point(mapping=aes(x=단지내주차면수, y=등록차량수, color=factor(지하철역수), shape=factor(지하철역수)), data=tr_uniq_df) +
   geom_smooth(method='lm', formula = y ~ x) +
   theme_bw()
+
+## 지하철역수를 수도권과 광역시, 비수독권으로 나눠서 분류??
+
 
 # 버스 정류장수가 1~20까지 있고, 이를 확인하기 위해서 구간별로 나눔?
 # hist 그래프를 그려보면 주로 0~5 구간에 몰려있고, 10이상은 극히 드묾을 알 수 있음
@@ -417,7 +418,96 @@ ggplot() +
   theme_bw()
 
 
-# 변수들 사이 상관계수 큼 => PCA(Principal Component Analysis; 주성분분석) 수행??
+## 예측 모형 사전 검토 
+# 전용면적들에 대한 다중 공산성이 높음?
+tr_uniq_df_lm <- lm(등록차량수 ~., data = tr_uniq_df[c(cols_num, "등록차량수")])
+tr_uniq_df_vif <- rms::vif(tr_uniq_df_lm)
+tr_uniq_df_vif %>% as.data.frame() %>%
+  rownames_to_column(var="변수명") %>%
+  rename(VIF = ".") %>%
+  arrange(-VIF)
+
+
+### PCA 진행 
+# 일반적으로는 전체 변화량의 90% 가량을 설명하는 주성분을 선택,
+# 여기서는 분산의 누적합계를 볼 때 PC9까지 선택을 볼 수 있음
+data_pca_results <- prcomp(tr_uniq_df[cols_num], scale = TRUE)
+summary(data_pca_results)
+# screeplot으로 확인을 하나, 그래프가 완만해지는 부분이 없음??
+# 각 개체에 대해 첫번째, 두번째 주성분 점수 및 행렬도(biplot) 그리기
+# 가까운 거리와 방향일수록 변수들의 상관성이 높아짐
+#
+factoextra::fviz_eig(data_pca_results)
+# screeplot(data_pca_results, main="", col="blue", type="lines", pch=1, npcs=length(data_pca_results$sdev))
+biplot(data_pca_results)
+
+pca_dim_12 <- factoextra::fviz_pca_var(data_pca_results, axes = c(1, 2),
+                              col.var = "contrib", # Color by contributions to the PC
+                              gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+                              repel = TRUE     # Avoid text overlapping
+)
+
+pca_dim_13 <- factoextra::fviz_pca_var(data_pca_results, axes = c(1, 3), 
+                              col.var = "contrib", # Color by contributions to the PC
+                              gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+                              repel = TRUE     # Avoid text overlapping
+)
+
+pca_dim_23 <- factoextra::fviz_pca_var(data_pca_results, axes = c(2, 3), 
+                              col.var = "contrib", # Color by contributions to the PC
+                              gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+                              repel = TRUE     # Avoid text overlapping
+)
+
+gridExtra::grid.arrange(pca_dim_12, pca_dim_13, pca_dim_23, nrow=1 )
+data_pca_results$rotation[, 1:5] %>% round(2)
+data_pca_results
+
+pca_results <- data_pca_results$x[, 1:9] %>% as_tibble()
+pca_results
+
+
+### 회귀 분석 비교
+### 주성분 회귀 모형
+pca_df <- tr_uniq_df %>% dplyr::select(등록차량수) %>% 
+  bind_cols(pca_results)
+
+pca_lm <- lm(등록차량수 ~., data=pca_df)
+
+pca_broom <- pca_lm %>% broom::glance() %>% gather(통계량, 통계수치) %>% 
+  mutate(모형 = "주성분 회귀") %>%
+  dplyr::select(모형, everything())
+
+
+### 다중 선형회귀 모형
+lm_broom <- tr_uniq_df_lm %>% broom::glance() %>%
+  gather(통계량, 통계수치) %>%
+  mutate(모형 = "다중회귀") %>%
+  dplyr::select(모형, everything())
+
+
+### 변수선택 다중 선형회귀 모델
+aic_lm <- stepAIC(tr_uniq_df_lm, trace=0)
+parsi_fm <- as.formula(summary(aic_lm)$call)
+
+parsi_broom <- lm(parsi_fm, data=tr_uniq_df) %>% broom::glance() %>%
+  gather(통계량, 통계수치) %>%
+  mutate(모형 = "변수선택 회귀") %>%
+  dplyr::select(모형, everything())
+
+
+### 회귀 모형 비교
+
+parking_model <- bind_rows(pca_broom, lm_broom) %>% bind_rows(parsi_broom)
+
+parking_model %>%
+  filter(통계량 == "adj.r.squared") %>%
+  ggplot(aes(x=모형, y=통계수치)) +
+  geom_bar(stat="identity", width=0.3, fill="blue") +
+  coord_flip() +
+  labs(y="조정결정계수(Adjusted R Squared)", x="모형") +
+  theme_minimal(base_family = "NanumGothic") +
+  geom_text(aes(label=round(통계수치, 2)), position=position_dodge(width=1), vjust=-0.0, hjust=-0.1)
 
 
 
@@ -562,7 +652,7 @@ area_freq_list <- tr_df %>%
         values_fill = 0
       ) %>% 
       # column명 정렬
-      select(all_of(sort(names(.))))
+      dplyr::select(all_of(sort(names(.))))
   })
 
 area_freq_list
@@ -589,21 +679,21 @@ cols_method1
 # 상가
 method1_shop_df <- tr_df %>% 
   filter(임대건물구분 == "상가") %>%
-  select(all_of(cols_method1)) %>% 
+  dplyr::select(all_of(cols_method1)) %>% 
   mutate(
     지하철역수   = ifelse(is.na(지하철역수),   0, 지하철역수),
     버스정류장수 = ifelse(is.na(버스정류장수), 0, 버스정류장수)
   ) %>% 
   distinct(across(everything())) %>% 
   inner_join(area_freq_list$상가, by = "단지코드") %>% 
-  select(단지코드, 등록차량수, everything())
+  dplyr::select(단지코드, 등록차량수, everything())
 
 method1_shop_df
 
 # 아파트
 method1_apt_df <- tr_df %>% 
   filter(임대건물구분 == "아파트") %>%
-  select(all_of(cols_method1), 임대보증금, 임대료, 전용면적별세대수) %>% 
+  dplyr::select(all_of(cols_method1), 임대보증금, 임대료, 전용면적별세대수) %>% 
   mutate(
     지하철역수   = ifelse(is.na(지하철역수),   0, 지하철역수),
     버스정류장수 = ifelse(is.na(버스정류장수), 0, 버스정류장수)
@@ -631,10 +721,10 @@ method1_apt_df <- tr_df %>%
     임대보증금   = ifelse(is.na(임대보증금), median(임대보증금, na.rm = TRUE), 임대보증금),
     임대료       = ifelse(is.na(임대료),     median(임대료    , na.rm = TRUE),     임대료)
   ) %>% 
-  select(-전용면적별세대수) %>% 
+  dplyr::select(-전용면적별세대수) %>% 
   distinct(across(everything())) %>% 
   inner_join(area_freq_list$아파트, by = "단지코드") %>% 
-  select(단지코드, 등록차량수, everything()) %>% 
+  dplyr::select(단지코드, 등록차량수, everything()) %>% 
   as.data.frame()
 
 method1_apt_df 
@@ -650,7 +740,7 @@ method1_apt_df
 
 set.seed(1)
 code_shop_tr <- method1_shop_df %>% 
-  select(단지코드, 지역) %>% 
+  dplyr::select(단지코드, 지역) %>% 
   group_by(지역) %>%
   slice_sample(prop = 0.8) %>%
   pull(단지코드)
@@ -664,7 +754,7 @@ code_shop_te
 set.seed(2)
 code_apt_tr <- method1_apt_df %>% 
   filter(!단지코드 %in% method1_shop_df$단지코드) %>% 
-  select(단지코드, 지역) %>% 
+  dplyr::select(단지코드, 지역) %>% 
   group_by(지역) %>% 
   slice_sample(prop = 0.8) %>%
   pull(단지코드)
@@ -678,11 +768,11 @@ code_apt_te <- c(code_apt_te, code_shop_te)
 
 method1_shop_df %<>% 
   mutate(tr_te = ifelse(단지코드 %in% code_shop_tr, "training", "test")) %>% 
-  select(tr_te, everything())
+  dplyr::select(tr_te, everything())
 
 method1_apt_df  %<>% 
   mutate(tr_te = ifelse(단지코드 %in% code_apt_tr,  "training", "test")) %>% 
-  select(tr_te, everything())
+  dplyr::select(tr_te, everything())
 
 
 # ### 결과 저장 ###
@@ -762,8 +852,8 @@ apt_tr_x_mat <-
   cbind(
     
     apt_tr_df %>% 
-      select(all_of(names_x)) %>% 
-      select(-지역) %>% 
+      dplyr::select(all_of(names_x)) %>% 
+      dplyr::select(-지역) %>% 
       as.matrix(),
     
     model.matrix(
@@ -775,8 +865,8 @@ apt_te_x_mat <-
   cbind(
     
     apt_te_df %>% 
-      select(all_of(names_x)) %>% 
-      select(-지역) %>% 
+      dplyr::select(all_of(names_x)) %>% 
+      dplyr::select(-지역) %>% 
       as.matrix(),
     
     model.matrix(
@@ -912,3 +1002,4 @@ data.frame(
 # End of File -------------------------------------------------------------
 
 # EOF
+
