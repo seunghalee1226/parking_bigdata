@@ -388,34 +388,113 @@ tr_uniq_df %>%
   corrplot::corrplot.mixed(tl.pos = 'd')
 
 
-# 지하철역수에 따른 등록 차량 수
-# 지하철역수가 적을수록 단지내 주차면수가 적고, 등록차량수가 적음을 확인 가능
-ggplot() +
-  geom_point(mapping=aes(x=단지내주차면수, y=등록차량수, color=factor(지하철역수), shape=factor(지하철역수)), data=tr_uniq_df) +
-  geom_smooth(method='lm', formula = y ~ x) +
-  theme_bw()
-
-## 지하철역수를 수도권과 광역시, 비수독권으로 나눠서 분류??
-
-
-# 버스 정류장수가 1~20까지 있고, 이를 확인하기 위해서 구간별로 나눔?
-# hist 그래프를 그려보면 주로 0~5 구간에 몰려있고, 10이상은 극히 드묾을 알 수 있음
-# 0 => 1구간, 1~3 => 2구간, 4~7 => 3구간, 8~10 => 4구간, 11~20 => 5구간 이런 식으로??
-hist(tr_uniq_df$버스정류장수)
-tr_uniq_df %>% group_by(버스정류장수) %>% summarise(count=n())
-
 tr_uniq_df_temp <- tr_uniq_df
 
+
+# 새로운 변수 생성? 세대당 주차면수 = 단지내주차면수 / 총세대수
+tr_uniq_df_temp$세대당주차면수 <- tr_uniq_df_temp$단지내주차면수/tr_uniq_df_temp$총세대수 %>% round(2)
+
+# 실거주세대당 등록차량수  = 등록차량수 / (총세대 - 공가수)
+tr_uniq_df_temp$실거주당주차등록 <- tr_uniq_df_temp$등록차량수/ (tr_uniq_df_temp$총세대수 - tr_uniq_df_temp$공가수)
+
+
+
+# 버스 구간 정하기
+# 1이하 : 0, 2~3 : 1, 4~5 : 2, 6~9 : 3, 10~ : 4
+hist(tr_uniq_df_temp$버스정류장수)
+tr_uniq_df_temp %>% group_by(버스정류장수) %>% summarise(count=n())
 tr_uniq_df_temp$버스구간 = ifelse(tr_uniq_df_temp$버스정류장수 < 2, 0,
-                        ifelse(tr_uniq_df_temp$버스정류장수 >= 2 & tr_uniq_df_temp$버스정류장수 < 4, 1,
-                           ifelse(tr_uniq_df_temp$버스정류장수 >= 4 & tr_uniq_df_temp$버스정류장수 < 6, 2,
-                              ifelse(tr_uniq_df_temp$버스정류장수 >= 6 & tr_uniq_df_temp$버스정류장수 < 10, 3, 4))))
+                              ifelse(tr_uniq_df_temp$버스정류장수 >= 2 & tr_uniq_df_temp$버스정류장수 < 4, 1,
+                                     ifelse(tr_uniq_df_temp$버스정류장수 >= 4 & tr_uniq_df_temp$버스정류장수 < 6, 2,
+                                            ifelse(tr_uniq_df_temp$버스정류장수 >= 6 & tr_uniq_df_temp$버스정류장수 < 9, 3, 4))))
+
+
+# 대중교통수로 합치기 (버스 + 지하철)
+tr_uniq_df_temp$대중교통수 <- tr_uniq_df_temp$지하철역수 + tr_uniq_df_temp$버스정류장수
+hist(tr_uniq_df_temp$대중교통수)
+tr_uniq_df_temp %>% group_by(대중교통수) %>% summarise(count=n())
+
+tr_uniq_df_temp$대중교통구간 = ifelse(tr_uniq_df_temp$대중교통수 < 2, 0,
+                              ifelse(tr_uniq_df_temp$대중교통수 >= 2 & tr_uniq_df_temp$대중교통수 < 4, 1,
+                                     ifelse(tr_uniq_df_temp$대중교통수 >= 4 & tr_uniq_df_temp$대중교통수 < 6, 2,
+                                            ifelse(tr_uniq_df_temp$대중교통수 >= 6 & tr_uniq_df_temp$대중교통수 < 9, 3, 4))))
+
+
+
+# 수도권만 따로 확인
+# 수도권 분류
+tr_uniq_df_metr <- rbind(subset(tr_uniq_df_temp, 지역=="서울특별시"), subset(tr_uniq_df_temp, 지역=="경기도"))
+
+# 지하철이 있는 광역시만 따로 확인
+# 부산(4), 대구(3), 대전(1), 광주(1)
+tr_uniq_df_mega <- rbind(subset(tr_uniq_df_temp, 지역=="부산광역시"), subset(tr_uniq_df_temp, 지역=="대구광역시"),
+                         subset(tr_uniq_df_temp, 지역=="대전광역시"), subset(tr_uniq_df_temp, 지역=="광주광역시"))
+
+# 그 외 도시 분류
+tr_uniq_df_city <- rbind(subset(tr_uniq_df_temp, 지역=="강원도"), subset(tr_uniq_df_temp, 지역=="경상남도"),
+                         subset(tr_uniq_df_temp, 지역=="경상북도"), subset(tr_uniq_df_temp, 지역=="세종특별자치시"),
+                         subset(tr_uniq_df_temp, 지역=="울산광역시"), subset(tr_uniq_df_temp, 지역=="전라남도"),
+                         subset(tr_uniq_df_temp, 지역=="전라북도"), subset(tr_uniq_df_temp, 지역=="제주특별자치도"),
+                         subset(tr_uniq_df_temp, 지역=="충청남도"), subset(tr_uniq_df_temp, 지역=="충청북도"))
+
+
+### 가설 1 : 주변에 지하철이 있으면 주차 등록에 영향이 없을 것이다
+### 가설 2 : 주변에 버스가 있으면 주차등록은 감소할 것이다
+### 가설 3 : 대중교통은 주차등록과 연관이 있다
+
+
+# 지하철
+# 수도권의 경우 주변에 지하철이 있으면 실거주당 주차등록대수가 1.2이하
+ggplot() +
+  geom_point(mapping=aes(x=세대당주차면수, y=실거주당주차등록, color=factor(지하철역수), shape=factor(지하철역수)), data=tr_uniq_df_metr) +
+  geom_smooth(method='lm', formula = y ~ x) +
+  theme_bw()
+
+# 지하철이 있는 광역시의 경우 관계가 없음
+ggplot() +
+  geom_point(mapping=aes(x=세대당주차면수, y=실거주당주차등록, color=factor(지하철역수), shape=factor(지하철역수)), data=tr_uniq_df_mega) +
+  geom_smooth(method='lm', formula = y ~ x) +
+  theme_bw()
+
+
+# 버스
+# 수도권의 경우 실구주당 주차등록수가 1.5정도? 버스와 관계성을 딱히 관계를 발견하지 못하겠음
+ggplot() +
+  geom_point(mapping=aes(x=세대당주차면수, y=실거주당주차등록, color=factor(버스구간), shape=factor(버스구간)), data=tr_uniq_df_metr) +
+  geom_smooth(method='lm', formula = y ~ x) +
+  theme_bw()
+
+ggplot() +
+  geom_point(mapping=aes(x=세대당주차면수, y=실거주당주차등록, color=factor(버스구간), shape=factor(버스구간)), data=tr_uniq_df_mega) +
+  geom_smooth(method='lm', formula = y ~ x) +
+  theme_bw()
 
 
 ggplot() +
-  geom_point(mapping=aes(x=단지내주차면수, y=등록차량수, color=factor(버스구간), shape=factor(버스구간)), data=tr_uniq_df_temp) +
+  geom_point(mapping=aes(x=세대당주차면수, y=실거주당주차등록, color=factor(버스구간), shape=factor(버스구간)), data=tr_uniq_df_city) +
   geom_smooth(method='lm', formula = y ~ x) +
   theme_bw()
+
+
+# 대중교통
+# 전혀... 해석 추가 필요할 듯...
+ggplot() +
+  geom_point(mapping=aes(x=세대당주차면수, y=실거주당주차등록, color=factor(대중교통구간), shape=factor(대중교통구간)), data=tr_uniq_df_metr) +
+  geom_smooth(method='lm', formula = y ~ x) +
+  theme_bw()
+
+ggplot() +
+  geom_point(mapping=aes(x=세대당주차면수, y=실거주당주차등록, color=factor(대중교통구간), shape=factor(대중교통구간)), data=tr_uniq_df_mega) +
+  geom_smooth(method='lm', formula = y ~ x) +
+  theme_bw()
+
+
+ggplot() +
+  geom_point(mapping=aes(x=세대당주차면수, y=실거주당주차등록, color=factor(대중교통구간), shape=factor(대중교통구간)), data=tr_uniq_df_city) +
+  geom_smooth(method='lm', formula = y ~ x) +
+  theme_bw()
+
+
 
 
 ## 예측 모형 사전 검토 
@@ -508,6 +587,12 @@ parking_model %>%
   labs(y="조정결정계수(Adjusted R Squared)", x="모형") +
   theme_minimal(base_family = "NanumGothic") +
   geom_text(aes(label=round(통계수치, 2)), position=position_dodge(width=1), vjust=-0.0, hjust=-0.1)
+
+
+
+
+
+
 
 
 
