@@ -15,7 +15,7 @@
 ### options ###
 options(scipen = 20)
 
-
+getwd()
 ### Working Directory 설정 ###
 # 데이터(csv 파일) 있는 폴더로 각자 설정
 # setwd("C:\\Users\\memoon\\Desktop\\빅데이터아카데미\\멘토링 예시코드 - 3조 문믿음")
@@ -52,7 +52,7 @@ myfcn_pkgInstallAttachLoad <- function(pkgs_attach, pkgs_load) {
 # 인터넷 연결 필요(CRAN 접속)
 myfcn_pkgInstallAttachLoad(
   
-  pkgs_attach = c("magrittr", "tidyverse", "glmnet", "randomForest", "dlookr", "ggplot2", "broom", "dplyr", "MASS"),
+  pkgs_attach = c("magrittr", "tidyverse", "glmnet", "randomForest", "dlookr", "ggplot2", "broom", "dplyr", "MASS", "rms"),
   pkgs_load = c("readr", "pillar", "psych", "Hmisc", "skimr", "ggplot2",
                 "corrplot", "VIM", "DMwR2", "mice", "MLmetrics")
 )
@@ -496,7 +496,6 @@ ggplot() +
 
 
 
-
 ## 예측 모형 사전 검토 
 # 전용면적들에 대한 다중 공산성이 높음?
 tr_uniq_df_lm <- lm(등록차량수 ~., data = tr_uniq_df[c(cols_num, "등록차량수")])
@@ -587,10 +586,6 @@ parking_model %>%
   labs(y="조정결정계수(Adjusted R Squared)", x="모형") +
   theme_minimal(base_family = "NanumGothic") +
   geom_text(aes(label=round(통계수치, 2)), position=position_dodge(width=1), vjust=-0.0, hjust=-0.1)
-
-
-
-
 
 
 
@@ -829,6 +824,8 @@ code_shop_tr <- method1_shop_df %>%
   group_by(지역) %>%
   slice_sample(prop = 0.8) %>%
   pull(단지코드)
+
+code_shop_tr
 code_shop_te <- setdiff(method1_shop_df$단지코드, code_shop_tr)
 code_shop_tr
 code_shop_te
@@ -850,6 +847,8 @@ code_apt_te <- method1_apt_df %>%
 code_apt_tr <- c(code_apt_tr, code_shop_tr)
 code_apt_te <- c(code_apt_te, code_shop_te)
 
+code_apt_tr
+code_apt_te
 
 method1_shop_df %<>% 
   mutate(tr_te = ifelse(단지코드 %in% code_shop_tr, "training", "test")) %>% 
@@ -888,6 +887,106 @@ method1_apt_df  %<>%
 
 
 
+#### 모델링
+## 참고 : https://statkclee.github.io/ml/ml-pm-continuous.html
+### 데이터 분할 및 결합
+
+shop_df <- method1_shop_df %>% dplyr::select(-c(단지코드))
+apt_df <- method1_shop_df %>% dplyr::select(-c(단지코드))
+
+
+# 
+# age_gender <- csv_list$age_gender_info
+# names(age_gender)
+# 
+# shop_df_1 <- merge(x=shod_df, y=age_gender, by="지역")
+# apt_df_1 <- merge(x=apt_df, y=age_gender, by="지역")
+# 
+
+names(apt_df)
+# 정규 분포 적합?
+
+apt_normal_g <- apt_df %>% 
+  ggplot(aes(x=등록차량수)) +
+  geom_histogram(aes(y = ..density..)) +
+  stat_function(fun = dnorm, 
+                args = list(mean = mean(apt_df$등록차량수), sd = sd(apt_df$등록차량수)), 
+                lwd = 2, col = 'red') +
+  theme_bw(base_family="NanumGothic") +
+  labs(title="아파트 등록차량수 분포", x="등록차량수", y="확률밀도(density)") +
+  scale_x_continuous(labels=scales::comma)
+
+apt_log_g <- apt_df %>% 
+    ggplot(aes(x=log(등록차량수))) +
+    geom_histogram(aes(y = ..density..)) +
+    stat_function(fun = dnorm, 
+                  args = list(mean = mean(log(apt_df$등록차량수)), sd = sd(log(apt_df$등록차량수))), 
+                  lwd = 2, col = 'red') +
+    theme_bw(base_family="NanumGothic") +
+    labs(title="아파트 등록차량수 분포(로그)", x="등록차량수", y="") +
+    scale_x_continuous(labels=scales::comma)
+
+### caret 예측모형 개발
+
+## 아파트
+# train, test 모델 분리
+apt_tr_df <- apt_df %>% filter(tr_te == "training") %>% dplyr::select(-c(tr_te))
+apt_te_df <- apt_df %>% filter(tr_te == "test") %>% dplyr::select(-c(tr_te))
+
+names(apt_tr_df)
+
+y_var <- "등록차량수"
+x_var <- setdiff(names(apt_tr_df), c(y_var))
+apt_fmla <- as.formula(paste(y_var, "~", paste(x_var, collapse="+")))
+apt_fmla
+
+# 0. 교체 타당도 제어 조건
+apt_ml_control <- caret::trainControl(method = "repeatedcv",
+                                      number = 5,
+                                      repeats = 1,
+                                      verboseIter = FALSE) 
+
+# 1. 선형회귀모형
+# RMSE : 2007.473, Rsquared : 0.2225285, MAE : 1461.912
+apt_caret_lm <- caret::train(apt_fmla, data = apt_tr_df,
+                      method = "lm", trControl = apt_ml_control)
+
+apt_caret_lm
+
+# 2. 강건 선형회귀모형
+## RMSE : NA, Rsquared : NA, MAE : NA --> 안됨
+apt_caret_rlm <- caret::train(apt_fmla, data = apt_tr_df,
+                              method="rlm", trControl = apt_ml_control)
+
+# 3. 부분최소자승모형
+## RMSE : NA, Rsquared : NA, MAE : NA --> 안됨
+
+apt_caret_plsr <- caret::train(apt_fmla, data = apt_tr_df,
+                               method="pls", 
+                               preProc = c("center", "scale"),
+                               tuneLength = 20,
+                               trControl = apt_ml_control)
+
+
+# 기본 모형 적합
+# rmse = 80.66923
+apt_lm <- lm(apt_fmla, data = apt_tr_df)
+apt_tr_df_new$pred <- predict(apt_lm)
+apt_tr_df_new %>% mutate(resid = pred - 등록차량수) %>% summarise(rmse = sqrt(mean(resid^2)))
+
+ggplot(apt_tr_df_new, aes(x = pred, y = 등록차량수)) +
+  geom_point() +
+  geom_abline(color = "darkblue", size=2) +
+  theme_bw(base_family="NanumGothic") +
+  labs(title="등록차량수 예측과 실제 등록차량수", 
+       x="예측 등록차량수", y="실제 등록차량수") +
+  scale_y_continuous(labels=scales::comma) +
+  scale_x_continuous(labels=scales::comma)
+
+# 변수 변환 모형 적합
+lm(등록차량수 ~ ., apt_tr_df)
+
+
 # modeling : 7/31(토) 진행 내용 -------------------------------------------
 
 # 변수명 저장
@@ -903,6 +1002,8 @@ apt_te_df <- method1_apt_df %>% filter(tr_te == "test")
 
 
 # intersect(apt_tr_df$단지코드, apt_te_df$단지코드)
+
+
 
 
 ### 선형 회귀 ###
