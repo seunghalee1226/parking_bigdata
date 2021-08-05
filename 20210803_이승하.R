@@ -16,6 +16,7 @@
 options(scipen = 20)
 
 getwd()
+setwd("C:\\parking_bigdata")
 ### Working Directory 설정 ###
 # 데이터(csv 파일) 있는 폴더로 각자 설정
 # setwd("C:\\Users\\memoon\\Desktop\\빅데이터아카데미\\멘토링 예시코드 - 3조 문믿음")
@@ -52,11 +53,12 @@ myfcn_pkgInstallAttachLoad <- function(pkgs_attach, pkgs_load) {
 # 인터넷 연결 필요(CRAN 접속)
 myfcn_pkgInstallAttachLoad(
   
-  pkgs_attach = c("magrittr", "tidyverse", "glmnet", "randomForest", "dlookr", "ggplot2", "broom", "dplyr", "MASS", "rms"),
+  pkgs_attach = c("magrittr", "tidyverse", "glmnet", "randomForest", "dlookr", 
+                  "ggplot2", "broom", "dplyr", "MASS", "rms", "xgboost",
+                  "recipes", "ipred", "gbm"),
   pkgs_load = c("readr", "pillar", "psych", "Hmisc", "skimr", "ggplot2",
                 "corrplot", "VIM", "DMwR2", "mice", "MLmetrics")
 )
-
 
 
 # load datasets -----------------------------------------------------------
@@ -379,6 +381,8 @@ for (tmp_name in cols_num) {
 }
 
 
+
+
 ### correlation ###
 # X, Y 둘다 연속형일 때 : Pearson correlation coefficient
 tr_uniq_df %>% 
@@ -386,6 +390,28 @@ tr_uniq_df %>%
   # (X, Y) 둘 다 문제 없는 pair들만 이용해 상관계수 계산
   cor(use = 'pairwise.complete.obs') %>% 
   corrplot::corrplot.mixed(tl.pos = 'd')
+
+
+### EDA
+# 데이터 위생 정검
+# 범주형 변수별 수준 갯수
+tr_uniq_df %>% select_if(is.factor) %>%
+  summarise_all(nlevels) %>% gather(variable, cnt)
+
+# 범주형 변수별 요약 통계량
+tr_uniq_df %>%
+  select_if(is.factor) %>% skim()
+
+# 범주형 변수
+cat_var  <- tr_uniq_df %>%
+  select_if(is.factor) %>%
+  colnames()
+
+## 연속형 변수
+tr_uniq_df %>%
+  dplyr::select(cont_var , 등록차량수) %>%
+  dplyr::group_by(등록차량수) %>%
+  skim()
 
 
 tr_uniq_df_temp <- tr_uniq_df
@@ -396,7 +422,6 @@ tr_uniq_df_temp$세대당주차면수 <- tr_uniq_df_temp$단지내주차면수/t
 
 # 실거주세대당 등록차량수  = 등록차량수 / (총세대 - 공가수)
 tr_uniq_df_temp$실거주당주차등록 <- tr_uniq_df_temp$등록차량수/ (tr_uniq_df_temp$총세대수 - tr_uniq_df_temp$공가수)
-
 
 
 # 버스 구간 정하기
@@ -545,16 +570,53 @@ pca_results <- data_pca_results$x[, 1:9] %>% as_tibble()
 pca_results
 
 
-### 회귀 분석 비교
+
+################## 회귀 분석 비교
 ### 주성분 회귀 모형
 pca_df <- tr_uniq_df %>% dplyr::select(등록차량수) %>% 
   bind_cols(pca_results)
 
 pca_lm <- lm(등록차량수 ~., data=pca_df)
+summary(pca_lm)
 
 pca_broom <- pca_lm %>% broom::glance() %>% gather(통계량, 통계수치) %>% 
   mutate(모형 = "주성분 회귀") %>%
   dplyr::select(모형, everything())
+pca_broom
+
+
+tr_uniq_df_1 <- tr_uniq_df
+tr_uniq_df_1$pre_pca <- predict(pca_lm)
+
+# 잔차분석
+# p-value : 0
+durbinWatsonTest(pca_lm)
+
+# Q-Q plot
+e_pca <- tr_uniq_df_1$pre_pca - tr_uniq_df_1$등록차량수
+qqnorm(e_pca); qqline(e_pca, col = "red")
+
+# 정규성
+# X-squared = 645.67, df = 2, p-value < 0.00000000000000022
+jarque.bera.test(resid(pca_lm))
+
+# 등분산성 산차 산점도
+tr_uniq_df_1$e_pca            <- e_pca
+ggplot(tr_uniq_df_1, aes(pre_pca, e_pca)) + 
+  geom_point(color = "gray20", size = 2) +
+  geom_smooth(method = "loess") + 
+  labs(x = "Predicted", y = "잔차") +
+  geom_hline(yintercept = 0, color = "red") + theme_classic() +
+  ggtitle("주성분 회귀 잔차산점도")
+
+# 등분산성 Breusch-Pagan Test
+# BP = 57.812, df = 9, p-value = 0.000000003532
+bptest(pca_lm)
+
+# 모형선택 기준: AIC 5652.898
+AIC(pca_lm)
+# 후진 소거법 : BIC 5697.419
+BIC(pca_lm)
 
 
 ### 다중 선형회귀 모형
@@ -563,19 +625,95 @@ lm_broom <- tr_uniq_df_lm %>% broom::glance() %>%
   mutate(모형 = "다중회귀") %>%
   dplyr::select(모형, everything())
 
+lm_broom
+summary(lm_broom)
 
 ### 변수선택 다중 선형회귀 모델
 aic_lm <- stepAIC(tr_uniq_df_lm, trace=0)
-parsi_fm <- as.formula(summary(aic_lm)$call)
+aic_lm
+summary(aic_lm)
 
-parsi_broom <- lm(parsi_fm, data=tr_uniq_df) %>% broom::glance() %>%
+
+tr_uniq_df_2 <- tr_uniq_df
+tr_uniq_df_2$pre_aic <- predict(aic_lm)
+
+# 잔차분석
+# p-value : 0.038
+durbinWatsonTest(aic_lm)
+
+# Q-Q plot
+e_aic <- tr_uniq_df_2$pre_aic - tr_uniq_df_2$등록차량수
+qqnorm(e_aic); qqline(e_aic, col = "red")
+
+# 정규성
+# XX-squared = 272.06, df = 2, p-value < 0.00000000000000022
+jarque.bera.test(resid(aic_lm))
+
+# 등분산성 산차 산점도
+tr_uniq_df_2$e_aic <- e_aic
+ggplot(tr_uniq_df_2, aes(pre_aic, e_aic)) + 
+  geom_point(color = "gray20", size = 2) +
+  geom_smooth(method = "loess") + 
+  labs(x = "Predicted", y = "잔차") +
+  geom_hline(yintercept = 0, color = "red") + theme_classic() +
+  ggtitle("변수선택 회귀 잔차산점도")
+
+# 등분산성 Breusch-Pagan Test
+# BP = 78.04, df = 12, p-value = 0.000000000009748
+bptest(aic_lm)
+
+# 모형선택 기준: AIC 5545.411
+AIC(aic_lm)
+# 후진 소거법 : BIC 5602.075
+BIC(aic_lm)
+
+
+### 다중회귀 모델
+parsi_fm <- as.formula(summary(aic_lm)$call)
+parsi_lm <- lm(parsi_fm, data=tr_uniq_df)
+summary(parsi_lm)
+
+parsi_broom <- parsi_lm %>%  broom::glance() %>%
   gather(통계량, 통계수치) %>%
   mutate(모형 = "변수선택 회귀") %>%
   dplyr::select(모형, everything())
 
 
-### 회귀 모형 비교
+tr_uniq_df_3 <- tr_uniq_df
+tr_uniq_df_3$pre_parsi <- predict(parsi_lm)
 
+# 잔차분석
+# p-value : 0.03
+durbinWatsonTest(parsi_lm)
+
+# Q-Q plot
+e_parsi <- tr_uniq_df_3$pre_parsi - tr_uniq_df_3$등록차량수
+qqnorm(e_parsi); qqline(e_parsi, col = "red")
+
+# 정규성
+# X-squared = 272.06, df = 2, p-value < 0.00000000000000022
+jarque.bera.test(resid(parsi_lm))
+
+# 등분산성 산차 산점도
+tr_uniq_df_3$e_parsi <- e_parsi
+ggplot(tr_uniq_df_3, aes(pre_parsi, e_parsi)) + 
+  geom_point(color = "gray20", size = 2) +
+  geom_smooth(method = "loess") + 
+  labs(x = "Predicted", y = "잔차") +
+  geom_hline(yintercept = 0, color = "red") + theme_classic() +
+  ggtitle("변수선택 회귀 잔차산점도")
+
+# 등분산성 Breusch-Pagan Test
+# BP = 78.04, df = 12, p-value = 0.000000000009748
+bptest(parsi_lm)
+
+# 모형선택 기준: AIC 5545.411
+AIC(parsi_lm)
+# 후진 소거법 : BIC 5602.075
+BIC(parsi_lm)
+
+
+### 회귀 모형 비교
 parking_model <- bind_rows(pca_broom, lm_broom) %>% bind_rows(parsi_broom)
 
 parking_model %>%
@@ -586,6 +724,9 @@ parking_model %>%
   labs(y="조정결정계수(Adjusted R Squared)", x="모형") +
   theme_minimal(base_family = "NanumGothic") +
   geom_text(aes(label=round(통계수치, 2)), position=position_dodge(width=1), vjust=-0.0, hjust=-0.1)
+
+
+
 
 
 
@@ -946,45 +1087,86 @@ apt_ml_control <- caret::trainControl(method = "repeatedcv",
                                       repeats = 1,
                                       verboseIter = FALSE) 
 
-# 1. 선형회귀모형
-# RMSE : 2007.473, Rsquared : 0.2225285, MAE : 1461.912
-apt_caret_lm <- caret::train(apt_fmla, data = apt_tr_df,
-                      method = "lm", trControl = apt_ml_control)
+### 1. 기본 모형 적합
+## 아파트
+# rmse = 81.1358
+apt_lm <- lm(apt_fmla, data = apt_df)
+summary(apt_lm)
+apt_df_new <- apt_df
+apt_df_new$pred <- predict(apt_lm)
 
-apt_caret_lm
+# 잔차분석
+# p-value : 0.44
+durbinWatsonTest(apt_lm)
 
-# 2. 강건 선형회귀모형
-## RMSE : NA, Rsquared : NA, MAE : NA --> 안됨
-apt_caret_rlm <- caret::train(apt_fmla, data = apt_tr_df,
-                              method="rlm", trControl = apt_ml_control)
+# Q-Q plot
+e_apt_lm <- apt_df_new$pred - apt_df_new$등록차량수
+qqnorm(e_apt_lm); qqline(e_apt_lm, col = "red")
 
-# 3. 부분최소자승모형
-## RMSE : NA, Rsquared : NA, MAE : NA --> 안됨
+# 정규성
+# X-squared = 33.028, df = 2, p-value = 0.00000006732
+jarque.bera.test(resid(apt_lm))
 
-apt_caret_plsr <- caret::train(apt_fmla, data = apt_tr_df,
-                               method="pls", 
-                               preProc = c("center", "scale"),
-                               tuneLength = 20,
-                               trControl = apt_ml_control)
+# 등분산성 산차 산점도
+apt_df_new$e_apt_lm <- e_apt_lm
+ggplot(apt_df_new, aes(pred, e_apt_lm)) + 
+  geom_point(color = "gray20", size = 2) +
+  geom_smooth(method = "loess") + 
+  labs(x = "Predicted", y = "잔차") +
+  geom_hline(yintercept = 0, color = "red") + theme_classic() +
+  ggtitle("변수선택 회귀 잔차산점도")
+
+# 등분산성 Breusch-Pagan Test
+# BP = 22.278, df = 18, p-value = 0.2199
+bptest(apt_lm)
+
+# 모형선택 기준: AIC 5423.7941
+AIC(apt_lm)
+# 후진 소거법 : BIC 453.7243
+BIC(apt_lm)
 
 
-# 기본 모형 적합
-# rmse = 80.66923
-apt_lm <- lm(apt_fmla, data = apt_tr_df)
-apt_tr_df_new$pred <- predict(apt_lm)
-apt_tr_df_new %>% mutate(resid = pred - 등록차량수) %>% summarise(rmse = sqrt(mean(resid^2)))
 
-ggplot(apt_tr_df_new, aes(x = pred, y = 등록차량수)) +
-  geom_point() +
-  geom_abline(color = "darkblue", size=2) +
-  theme_bw(base_family="NanumGothic") +
-  labs(title="등록차량수 예측과 실제 등록차량수", 
-       x="예측 등록차량수", y="실제 등록차량수") +
-  scale_y_continuous(labels=scales::comma) +
-  scale_x_continuous(labels=scales::comma)
+## 상가
+# rmse = 81.1358
+shop_lm <- lm(apt_fmla, data = shop_df)
+summary(shop_lm)
+shop_df_new <- shop_df
+shop_df_new$pred <- predict(shop_lm)
 
-# 변수 변환 모형 적합
-lm(등록차량수 ~ ., apt_tr_df)
+# 잔차분석
+# p-value : 0.488
+durbinWatsonTest(shop_lm)
+
+# Q-Q plot
+e_shop_lm <- shop_df_new$pred - shop_df_new$등록차량수
+qqnorm(e_shop_lm); qqline(e_shop_lm, col = "red")
+
+# 정규성
+# X-squared = 33.028, df = 2, p-value = 0.00000006732
+jarque.bera.test(resid(shop_lm))
+
+# 등분산성 산차 산점도
+shop_df_new$e_shop_lm <- e_shop_lm
+ggplot(shop_df_new, aes(pred, e_shop_lm)) + 
+  geom_point(color = "gray20", size = 2) +
+  geom_smooth(method = "loess") + 
+  labs(x = "Predicted", y = "잔차") +
+  geom_hline(yintercept = 0, color = "red") + theme_classic() +
+  ggtitle("변수선택 회귀 잔차산점도")
+
+# 등분산성 Breusch-Pagan Test
+# BP = 22.278, df = 18, p-value = 0.2199
+bptest(shop_lm)
+
+# 모형선택 기준: AIC 423.7941
+AIC(shop_lm)
+# 후진 소거법 : BIC 453.7243
+BIC(shop_lm)
+
+
+
+
 
 
 # modeling : 7/31(토) 진행 내용 -------------------------------------------
